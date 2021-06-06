@@ -101,7 +101,13 @@ void InitialConnectStateMachine::_stateRequestAutopilotVersion(StateMachine* sta
         qCDebug(InitialConnectStateMachineLog) << "Skipping REQUEST_MESSAGE:AUTOPILOT_VERSION request due to no primary link";
         connectMachine->advance();
     } else {
-        if (sharedLink->linkConfiguration()->isHighLatency() || sharedLink->isPX4Flow() || sharedLink->isLogReplay()) {
+        if (sharedLink->linkConfiguration()->isHighLatency()) {
+            uint64_t assumedCapabilities = 0;
+            assumedCapabilities |= MAV_PROTOCOL_CAPABILITY_MAVLINK2;
+            assumedCapabilities |= MAV_PROTOCOL_CAPABILITY_MISSION_INT | MAV_PROTOCOL_CAPABILITY_COMMAND_INT | MAV_PROTOCOL_CAPABILITY_MISSION_FENCE | MAV_PROTOCOL_CAPABILITY_MISSION_RALLY;
+            vehicle->_setCapabilities(assumedCapabilities);
+            connectMachine->advance();
+        } else if (sharedLink->isPX4Flow() || sharedLink->isLogReplay()) {
             qCDebug(InitialConnectStateMachineLog) << "Skipping REQUEST_MESSAGE:AUTOPILOT_VERSION request due to link type";
             connectMachine->advance();
         } else {
@@ -211,7 +217,13 @@ void InitialConnectStateMachine::_stateRequestProtocolVersion(StateMachine* stat
         qCDebug(InitialConnectStateMachineLog) << "Skipping REQUEST_MESSAGE:PROTOCOL_VERSION request due to no primary link";
         connectMachine->advance();
     } else {
-        if (sharedLink->linkConfiguration()->isHighLatency() || sharedLink->isPX4Flow() || sharedLink->isLogReplay()) {
+        if (sharedLink->linkConfiguration()->isHighLatency()) {
+            qCDebug(InitialConnectStateMachineLog) << "High Latency Link - MAV20";
+            vehicle->_mavlinkProtocolRequestMaxProtoVersion = 200;
+            vehicle->_mavlinkProtocolRequestComplete = true;
+            vehicle->_setMaxProtoVersionFromBothSources();
+            connectMachine->advance();
+        } else if (sharedLink->isPX4Flow() || sharedLink->isLogReplay()) {
             qCDebug(InitialConnectStateMachineLog) << "Skipping REQUEST_MESSAGE:PROTOCOL_VERSION request due to link type";
             connectMachine->advance();
         } else {

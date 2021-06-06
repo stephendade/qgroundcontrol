@@ -307,9 +307,10 @@ bool VehicleLinkManager::_updatePrimaryLink(void)
         if (bestActivePrimaryLink != primaryLink) {
             if (primaryLink && primaryLink->linkConfiguration()->isHighLatency()) {
                 _vehicle->sendMavCommand(MAV_COMP_ID_AUTOPILOT1,
-                               MAV_CMD_CONTROL_HIGH_LATENCY,
+                               MAV_CMD_SET_MESSAGE_INTERVAL,
                                true,
-                               0); // Stop transmission on this link
+                               MAVLINK_MSG_ID_HIGH_LATENCY2,
+                               1000000); // Stop transmission on this link
             }
 
             _primaryLink = bestActivePrimaryLink;
@@ -317,9 +318,10 @@ bool VehicleLinkManager::_updatePrimaryLink(void)
 
             if (bestActivePrimaryLink && bestActivePrimaryLink->linkConfiguration()->isHighLatency()) {
                 _vehicle->sendMavCommand(MAV_COMP_ID_AUTOPILOT1,
-                               MAV_CMD_CONTROL_HIGH_LATENCY,
+                               MAV_CMD_SET_MESSAGE_INTERVAL,
                                true,
-                               1); // Start transmission on this link
+                               MAVLINK_MSG_ID_HIGH_LATENCY2,
+                               1000000); // Start transmission on this link
             }
             return true;
         } else {

@@ -1,4 +1,4 @@
-/****************************************************************************
+﻿/****************************************************************************
  *
  * (c) 2009-2020 QGROUNDCONTROL PROJECT <http://www.qgroundcontrol.org>
  *
@@ -603,7 +603,7 @@ void Vehicle::_mavlinkMessageReceived(LinkInterface* link, mavlink_message_t mes
     _messagesReceived++;
     emit messagesReceivedChanged();
     if(!_heardFrom) {
-        if(message.msgid == MAVLINK_MSG_ID_HEARTBEAT) {
+        if(message.msgid == MAVLINK_MSG_ID_HEARTBEAT || MAVLINK_MSG_ID_HIGH_LATENCY2) {
             _heardFrom  = true;
             _compID     = message.compid;
             _messageSeq = message.seq + 1;
@@ -1161,22 +1161,33 @@ void Vehicle::_handleHighLatency2(mavlink_message_t& message)
     mavlink_high_latency2_t highLatency2;
     mavlink_msg_high_latency2_decode(&message, &highLatency2);
 
-    QString previousFlightMode;
-    if (_base_mode != 0 || _custom_mode != 0){
-        // Vehicle is initialized with _base_mode=0 and _custom_mode=0. Don't pass this to flightMode() since it will complain about
-        // bad modes while unit testing.
-        previousFlightMode = flightMode();
-    }
-    _base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED;
-    _custom_mode = _firmwarePlugin->highLatencyCustomModeTo32Bits(highLatency2.custom_mode);
-    if (previousFlightMode != flightMode()) {
-        emit flightModeChanged(flightMode());
+    bool newArmed = highLatency2.custom0 & MAV_MODE_FLAG_DECODE_POSITION_SAFETY;
+
+    // ArduPilot firmare has a strange case when ARMING_REQUIRE=0. This means the vehicle is always armed but the motors are not
+    // really powered up until the safety button is pressed. Because of this we can't depend on the heartbeat to tell us the true
+    // armed (and dangerous) state. We must instead rely on SYS_STATUS telling us that the motors are enabled.
+    if (apmFirmware()) {
+        if (!_apmArmingNotRequired() || !(_onboardControlSensorsPresent & MAV_SYS_STATUS_SENSOR_MOTOR_OUTPUTS)) {
+            // If ARMING_REQUIRE!=0 or we haven't seen motor output status yet we use the hearbeat info for armed
+            _updateArmed(newArmed);
+        }
+    } else {
+        // Non-ArduPilot always updates from armed state in heartbeat
+        _updateArmed(newArmed);
     }
 
-    // Assume armed since we don't know
-    if (_armed != true) {
-        _armed = true;
-        emit armedChanged(_armed);
+    if (highLatency2.custom0 != _base_mode || _firmwarePlugin->highLatencyCustomModeTo32Bits(highLatency2.custom_mode) != _custom_mode) {
+        QString previousFlightMode;
+        if (_base_mode != 0 || _custom_mode != 0){
+            // Vehicle is initialized with _base_mode=0 and _custom_mode=0. Don't pass this to flightMode() since it will complain about
+            // bad modes while unit testing.
+            previousFlightMode = flightMode();
+        }
+        _base_mode   = highLatency2.custom0;
+        _custom_mode = _firmwarePlugin->highLatencyCustomModeTo32Bits(highLatency2.custom_mode);
+        if (previousFlightMode != flightMode()) {
+            emit flightModeChanged(flightMode());
+        }
     }
 
     _coordinate.setLatitude(highLatency2.latitude  / (double)1E7);
@@ -1203,7 +1214,14 @@ void Vehicle::_handleHighLatency2(mavlink_message_t& message)
         { HL_FAILURE_FLAG_3D_ACCEL,                 MAV_SYS_STATUS_SENSOR_3D_ACCEL },
         { HL_FAILURE_FLAG_3D_GYRO,                  MAV_SYS_STATUS_SENSOR_3D_GYRO },
         { HL_FAILURE_FLAG_3D_MAG,                   MAV_SYS_STATUS_SENSOR_3D_MAG },
+        { HL_FAILURE_FLAG_ESTIMATOR,                MAV_SYS_STATUS_AHRS},
+        { HL_FAILURE_FLAG_GEOFENCE,                 MAV_SYS_STATUS_GEOFENCE},
+        { HL_FAILURE_FLAG_RC_RECEIVER,              MAV_SYS_STATUS_SENSOR_RC_RECEIVER},
+        { HL_FAILURE_FLAG_BATTERY,                  MAV_SYS_STATUS_SENSOR_BATTERY},
+        { HL_FAILURE_FLAG_TERRAIN,                  MAV_SYS_STATUS_TERRAIN},
     };
+
+    //sum of all bitmasks is 32+16+8+2+1+2097152+1048576+65536+33554432+4194304 = 40960059
 
     // Map from MAV_FAILURE bits to standard SYS_STATUS message handling
     uint32_t newOnboardControlSensorsEnabled = 0;
@@ -1214,10 +1232,32 @@ void Vehicle::_handleHighLatency2(mavlink_message_t& message)
             newOnboardControlSensorsEnabled |= pFailure2Sensor->sensorBit;
         }
     }
-    if (newOnboardControlSensorsEnabled != _onboardControlSensorsEnabled) {
-        _onboardControlSensorsEnabled = newOnboardControlSensorsEnabled;
-        _onboardControlSensorsPresent = newOnboardControlSensorsEnabled;
-        _onboardControlSensorsUnhealthy = 0;
+
+    if (newOnboardControlSensorsEnabled != _onboardControlSensorsUnhealthy) {
+        _onboardControlSensorsEnabled = 40960059;
+        _onboardControlSensorsPresent = 40960059;
+        _onboardControlSensorsUnhealthy = newOnboardControlSensorsEnabled;
+
+        //need to fake up a SYS_STATUS msg for the GUI to display properly
+        mavlink_sys_status_t* sys_status = new mavlink_sys_status_t();
+        //mavlink_msg_sys_status_decode(&message, &sysStatus);
+
+
+        sys_status->onboard_control_sensors_present = 40960059;
+        sys_status->onboard_control_sensors_enabled = 40960059;
+        //uint32_t newSensorsUnhealthy = _onboardControlSensorsEnabled & ~_onboardControlSensorsHealth;
+        sys_status->onboard_control_sensors_health = ~_onboardControlSensorsUnhealthy;
+        sys_status->load = 0;
+        sys_status->voltage_battery = 0;
+        sys_status->current_battery = 0;
+        sys_status->drop_rate_comm = 0;
+        sys_status->errors_comm = 0;
+        sys_status->errors_count1 = 0;
+        sys_status->errors_count2 = 0;
+        sys_status->errors_count3 = 0;
+        sys_status->errors_count4 = 0;
+        sys_status->battery_remaining = 0;
+        _sysStatusSensorInfo.update(*sys_status);
     }
 }
 
